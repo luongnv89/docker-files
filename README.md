@@ -16,9 +16,33 @@ The repository uses GitHub Actions to build/publish images to GHCR:
 
 - `.github/workflows/build-u2204dev.yml` builds `u2204dev` and pushes `ghcr.io/<owner>/u2204dev`.
 - Workflows authenticate with the built-in `GITHUB_TOKEN`; ensure the repo has package publishing permissions and adjust package visibility in GitHub Packages as needed.
-- Each build publishes a `latest` tag plus an immutable commit `sha` tag.
+- Each build publishes a `latest` tag plus an immutable commit `sha` tag, and produces a multi-architecture manifest (linux/amd64 + linux/arm64) so M-series Macs/ARM servers can pull without a fallback.
 
 Use **Actions → Build and Publish u2204dev** to trigger the workflow manually.
+
+### Consume the published image
+
+1. Authenticate against GitHub Container Registry (requires a PAT with at least the `read:packages` scope):
+
+   ```bash
+   echo "${GH_PAT:?}" | docker login ghcr.io -u <your-github-username> --password-stdin
+   ```
+
+2. Pull the image that Actions publishes (`latest` or a specific commit SHA tag). The repo currently builds `ghcr.io/luongnv89/u2204dev`:
+
+   ```bash
+   docker pull ghcr.io/luongnv89/u2204dev:latest
+   # or for a reproducible version:
+   docker pull ghcr.io/luongnv89/u2204dev:<git-sha>
+   ```
+
+3. Run the container the same way you would if you built it locally:
+
+   ```bash
+   docker run --rm -it ghcr.io/luongnv89/u2204dev:latest zsh
+   ```
+
+> Tip: once authenticated, `docker compose` services can reference the GHCR image directly via `ghcr.io/luongnv89/u2204dev:<tag>`.
 
 ## Development Workflow
 
