@@ -1,0 +1,34 @@
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Node / frontend
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# Python
+__pycache__/
+*.py[cod]
+.python-version
+.venv/
+venv/
+env/
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build / dist
+dist/
+build/
+*.egg-info/
+
+# Env/config
+.env
+.env.*
+
+# Docker
+.docker/
