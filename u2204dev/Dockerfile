@@ -65,8 +65,14 @@ RUN set -eux; \
     git clone https://github.com/zsh-users/zsh-autosuggestions.git /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions; \
     git clone https://github.com/zsh-users/zsh-completions.git /root/.oh-my-zsh/custom/plugins/zsh-completions
 
-# Copy custom theme into Oh My Zsh
-COPY wedisagree.zsh-theme /root/.oh-my-zsh/themes/wedisagree.zsh-theme
+# Install Starship prompt
+RUN set -eux; \
+    echo "[Starship] Installing Starship prompt"; \
+    curl -sS https://starship.rs/install.sh | sh -s -- -y; \
+    mkdir -p /root/.config
+
+# Copy Starship configuration
+COPY starship.toml /root/.config/starship.toml
 
 # Configure Vim with useful plugins
 COPY .vimrc /root/.vimrc
@@ -89,13 +95,64 @@ RUN set -eux; \
     echo "[Shell] Setting default shell to zsh"; \
     chsh -s $(which zsh)
 
-# Configure Oh My Zsh theme and plugins
-RUN sed -i 's/^ZSH_THEME=".*"/ZSH_THEME="wedisagree"/' /root/.zshrc; \
-    sed -i 's/plugins=(git)/plugins=(git zsh-syntax-highlighting zsh-autosuggestions zsh-completions)/' /root/.zshrc
+# Configure Oh My Zsh plugins (disable default theme for Starship)
+RUN sed -i 's/^ZSH_THEME=".*"/ZSH_THEME=""/' /root/.zshrc; \
+    sed -i 's/plugins=(git)/plugins=(git zsh-syntax-highlighting zsh-autosuggestions zsh-completions docker kubectl npm pip python)/' /root/.zshrc
 
-# Display a friendly welcome message on login
+# Configure Starship and development-friendly terminal settings
 RUN cat <<'EOF' >> /root/.zshrc
 
+# Initialize Starship prompt
+eval "$(starship init zsh)"
+
+# Development-friendly aliases
+alias ls='ls --color=auto'
+alias ll='ls -lah'
+alias la='ls -A'
+alias l='ls -CF'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias grep='grep --color=auto'
+alias cat='bat --paging=never'
+alias catp='bat'
+alias top='btop'
+
+# Git aliases
+alias gs='git status'
+alias ga='git add'
+alias gc='git commit'
+alias gp='git push'
+alias gl='git log --oneline --graph --decorate'
+alias gd='git diff'
+
+# Docker aliases
+alias d='docker'
+alias dc='docker compose'
+alias dps='docker ps'
+alias di='docker images'
+
+# Python virtual environment helpers
+alias venv='python3 -m venv venv'
+alias activate='source venv/bin/activate'
+
+# Better history settings
+export HISTFILE=~/.zsh_history
+export HISTSIZE=10000
+export SAVEHIST=10000
+setopt HIST_IGNORE_ALL_DUPS
+setopt HIST_FIND_NO_DUPS
+setopt HIST_SAVE_NO_DUPS
+setopt SHARE_HISTORY
+setopt APPEND_HISTORY
+setopt INC_APPEND_HISTORY
+
+# Auto-correction and completion settings
+setopt CORRECT
+setopt AUTO_CD
+setopt AUTO_PUSHD
+setopt PUSHD_IGNORE_DUPS
+
+# Display a friendly welcome message on login
 echo ""
 echo "Welcome to the u2204dev container!"
 if command -v python3 >/dev/null 2>&1; then
@@ -113,7 +170,7 @@ if command -v npm >/dev/null 2>&1; then
 else
   NPM_VER="npm: not installed"
 fi
-echo "Shell: Oh My Zsh + wedisagree theme"
+echo "Shell: Zsh + Starship + Oh My Zsh plugins"
 echo "Editor: Vim with plugins"
 echo "$PY_VER"
 echo "$NODE_VER"
