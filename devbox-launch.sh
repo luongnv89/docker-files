@@ -17,7 +17,8 @@
 #   - Workspace mounting (user-specified or current directory)
 #   - Auto-generated or custom container names (prefix: devbox-)
 #   - AI skills-only mounting (~/.agents → /root/.agents)
-#   - SSH agent/key forwarding for GitHub authentication
+#   - SSH config volume with rewritten host paths for container compatibility
+#   - gh CLI auth for GitHub operations
 #   - Automatic container attachment after startup (unless --detach)
 
 set -euo pipefail
@@ -29,6 +30,7 @@ CONTAINER_NAME=""
 DETACH=false
 declare -a PORT_MAPS=()
 declare -a ENV_VARS=()
+SSH_VOL="devbox-ssh-config"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 usage() {
@@ -122,7 +124,33 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     log_error "A container with name '$CONTAINER_NAME' already exists. Use --name to specify a different name, or remove the existing container."
 fi
 
-# ── Build docker run command ──────────────────────────────────────────────────
+# ── Prepare SSH volume (rewrites host paths for container) ───────────────────
+if [[ -d "$HOME/.ssh" ]] && ls "$HOME/.ssh" >/dev/null 2>&1; then
+    if ! docker volume inspect "$SSH_VOL" &>/dev/null 2>&1; then
+        SSH_TMP=$(mktemp -d)
+        cp -a "$HOME/.ssh" "$SSH_TMP/"
+        # Rewrite host paths to container paths
+        if [[ -f "$SSH_TMP/.ssh/config" ]]; then
+            sed -i \
+                -e "s|/home/montimage/.ssh/|/root/.ssh/|g" \
+                -e "s|/home/\${USER}/.ssh/|/root/.ssh/|g" \
+                -e "s|/home/montimage/|/root/|g" \
+                "$SSH_TMP/.ssh/config"
+        fi
+        docker volume create "$SSH_VOL"
+        docker run --rm \
+            -v "$SSH_TMP/.ssh:/src:ro" \
+            -v "$SSH_VOL:/dst" \
+            alpine:latest \
+            cp -a /src/. /dst/
+        rm -rf "$SSH_TMP"
+    fi
+    log_info "Mounted ~/.ssh → /root/.ssh (via Docker volume, paths rewritten)"
+else
+    log_warn "$HOME/.ssh not found — SSH authentication not available"
+fi
+
+# ── Build docker run command ─────────────────────────────────────────────────
 CMD=(docker run)
 
 # Interactive and TTY for attachment
@@ -145,29 +173,13 @@ else
     log_warn "$HOME/.agents not found — skipping AI agent skills mount"
 fi
 
-# SSH config mount (read-only)
-if [[ -d "$HOME/.ssh" ]] && ls "$HOME/.ssh" >/dev/null 2>&1; then
-    CMD+=("-v" "${HOME}/.ssh:/root/.ssh:ro")
-    log_info "Mounted ~/.ssh → /root/.ssh (read-only)"
-else
-    log_warn "$HOME/.ssh not found — SSH authentication not available"
-fi
+# SSH config mount via Docker volume
+CMD+=("-v" "${SSH_VOL}:/root/.ssh")
 
-# SSH agent forwarding (if ssh-agent is running)
-if [[ -n "${SSH_AUTH_SOCK:-}" ]]; then
-    # Determine the socket path (macOS vs Linux)
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS: ssh-auth-sock is typically in a non-standard location
-        CMD+=("-v" "${SSH_AUTH_SOCK}:/tmp/ssh-auth-sock")
-        CMD+=("-e" "SSH_AUTH_SOCK=/tmp/ssh-auth-sock")
-    else
-        # Linux: typically in a tmp directory
-        CMD+=("-v" "${SSH_AUTH_SOCK}:/tmp/ssh-auth-sock")
-        CMD+=("-e" "SSH_AUTH_SOCK=/tmp/ssh-auth-sock")
-    fi
-    log_info "Forwarded SSH agent via $SSH_AUTH_SOCK"
-else
-    log_info "No SSH agent found — GitHub SSH authentication will rely on mounted keys"
+# gh CLI auth mount
+if [[ -d "$HOME/.config/gh" ]]; then
+    CMD+=("-v" "${HOME}/.config/gh:/root/.config/gh")
+    log_info "Mounted ~/.config/gh → /root/.config/gh"
 fi
 
 # Port mappings
@@ -177,16 +189,26 @@ done
 
 # Environment variables
 for i in "${!ENV_VARS[@]}"; do
-    CMD+=("${ENV_VARS[$i]}")
+    CMD+=("-e" "${ENV_VARS[$i]}")
 done
 
-# Image and command
+# Entry point: fix SSH permissions, configure git, setup gh auth, then exec zsh
+CMD+=("--entrypoint" "zsh")
 CMD+=("$IMAGE")
-if [[ "$DETACH" == true ]]; then
-    CMD+=("sleep" "infinity")
-else
-    CMD+=("zsh")
-fi
+CMD+=(-c '
+    chown -R root:root /root/.ssh
+    chmod 700 /root/.ssh
+    chmod 600 /root/.ssh/config /root/.ssh/config.bak 2>/dev/null || true
+    chmod 600 /root/.ssh/id_* 2>/dev/null || true
+    chmod 644 /root/.ssh/*.pub 2>/dev/null || true
+    chmod 644 /root/.ssh/known_hosts /root/.ssh/known_hosts.old 2>/dev/null || true
+    chmod 644 /root/.ssh/authorized_keys 2>/dev/null || true
+    git config --global user.name "Lucian N. Viorel"
+    git config --global user.email "luongnv89@gmail.com"
+    git config --global init.defaultBranch main
+    gh auth setup-git 2>/dev/null
+    exec zsh
+')
 
 # ── Launch ────────────────────────────────────────────────────────────────────
 log_info "Container: $CONTAINER_NAME"
@@ -195,8 +217,9 @@ log_info "Workspace: $WORKSPACE"
 log_info "──────────────────────────────────────"
 
 if [[ "$DETACH" == true ]]; then
-    CMD+=("-d")
     log_info "Starting in detached mode..."
+    CMD+=("-d")
+    CMD+=("sleep" "infinity")
     "${CMD[@]}"
     log_info "Container '$CONTAINER_NAME' started in background."
     log_info "Enter with: docker exec -it $CONTAINER_NAME zsh"
